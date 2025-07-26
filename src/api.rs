@@ -12,7 +12,6 @@ pub(crate) async fn chat(req: String) -> (ContentType, TextStream<impl Stream<It
             Ok(stream) => {
                 let mut boxed_stream = Box::pin(stream);
                 while let Some(resp) = boxed_stream.next().await {
-                    println!("resp: {:?}", resp);
                     yield format!("event: message\ndata: {}\n\n", resp);
                 }
                 yield "event: abort\n".to_string()

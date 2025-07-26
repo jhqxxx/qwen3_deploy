@@ -1,5 +1,5 @@
 use crate::utils::{get_device, get_template};
-use candle_core::{DType, Device, Error, Result, Tensor};
+use candle_core::{DType, Device, Error, Result, Tensor, bail};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::qwen3::{Config, ModelForCausalLM};
@@ -65,7 +65,7 @@ pub struct Qwen3<'a> {
 }
 
 impl<'a> Qwen3<'a> {
-    pub fn new(path: String) -> Result<Self> {
+    pub fn new(path: String) -> anyhow::Result<Self> {
         Qwen3::new_with_param(path, 81920, 1.1, 64)
     }
     pub fn new_with_param(
@@ -73,7 +73,7 @@ impl<'a> Qwen3<'a> {
         max_generate: usize,
         repeat_penalty: f32,
         repeat_last_n: usize,
-    ) -> Result<Self> {
+    ) -> anyhow::Result<Self> {
         assert!(
             std::path::Path::new(&path).exists(),
             "model path file not exists"
@@ -138,11 +138,11 @@ impl<'a> Qwen3<'a> {
         })
     }
 
-    pub fn infer(&mut self, message_str: String) -> Result<impl Stream<Item = String>> {
+    pub fn infer(&mut self, message_str: String) -> anyhow::Result<impl Stream<Item = String>> {
         let mut tokens = self
             .tokenizer
             .encode(message_str, true)
-            .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?
+            .map_err(|e| anyhow::anyhow!(e))?
             .get_ids()
             .to_vec();
         let input_len = tokens.len();
@@ -199,7 +199,10 @@ impl<'a> Qwen3<'a> {
         Ok(next_token)
     }
 
-    pub fn generate_stream(&mut self, messages: String) -> Result<impl Stream<Item = String>> {
+    pub fn generate_stream(
+        &mut self,
+        messages: String,
+    ) -> anyhow::Result<impl Stream<Item = String>> {
         let request: ChatRequest = serde_json::from_str(&messages)
             .map_err(|e| Error::Msg(format!("Failed to parse request JSON: {}", e)))?;
         let context = context! {

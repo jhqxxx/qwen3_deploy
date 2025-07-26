@@ -13,6 +13,8 @@ use uuid::uuid;
 mod qwen3;
 mod utils;
 
+const MODEL_NAME: &str = "qwen3-0.6b";
+
 static MODEL: OnceLock<Arc<RwLock<Qwen3>>> = OnceLock::new();
 pub fn init(path: &str) -> anyhow::Result<()> {
     let model_path = path.to_string();
@@ -26,16 +28,18 @@ pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> 
         .get()
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("model not init"))?;
+
     let id = uuid::Uuid::new_v4().to_string();
     let response = ChatCompletionChunkResponse {
         id: Some(id),
         choices: vec![],
         created: chrono::Utc::now().timestamp() as u32,
-        model: "qwen3-0.6b".to_string(),
+        model: MODEL_NAME.to_string(),
         system_fingerprint: None,
         object: "chat.completion.chunk".to_string(),
         usage: None,
     };
+
     Ok(stream! {
         match model_ref.write().await.generate_stream(message.to_string()) {
             Ok(inner_stream) => {
@@ -66,10 +70,10 @@ pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> 
 }
 
 mod tests {
-    use crate::init;
-    use std::pin::pin;
     use crate::chat_stream;
+    use crate::init;
     use rocket::futures::{Stream, StreamExt};
+    use std::pin::pin;
 
     #[tokio::test]
     async fn test_chat() {
