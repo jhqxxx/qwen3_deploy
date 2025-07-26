@@ -1,5 +1,5 @@
 use std::process::Command;
-
+use serde_json::{Value};
 use candle_core::{Result, Device, Error};
 
 pub fn gpu_sm_arch_is_ok() -> Result<bool> {
@@ -23,7 +23,7 @@ pub fn gpu_sm_arch_is_ok() -> Result<bool> {
           "gpr sm arch: {} parse float32 error", output_str
         )))
     };
-    if sm_float > 7.6 {
+    if sm_float >=6.1 {
         Ok(true)
     } else {
         Ok(false)
@@ -42,4 +42,28 @@ pub fn get_device() -> Result<Device> {
         Err(_) => Device::Cpu
     };
     Ok(device)
+}
+
+pub fn get_template(path: String) -> Result<String> {
+    assert!(
+        std::path::Path::new(&path).exists(),
+        "tokenizer_config.json not exists in model path"
+    );
+    let tokenizer_config: Value =
+        serde_json::from_slice(&std::fs::read(path)?)
+            .map_err(|e| Error::Msg(format!("load tokenizer_config file error:{}", e)))?;
+    let chat_template = tokenizer_config["chat_template"]
+        .as_str()
+        .ok_or(Error::Msg(format!("chat_template to str error")))?;
+    // 修复模板中的问题行
+    let fixed_template = chat_template
+        .replace(
+            "message.content.startswith('<tool_response>')",
+            "str_startswith(message.content, '<tool_response>')",
+        )
+        .replace(
+            "message.content.endswith('</tool_response>')",
+            "str_endswith(message.content, '</tool_response>')",
+        );
+    Ok(fixed_template)
 }

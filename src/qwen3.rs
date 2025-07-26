@@ -5,7 +5,7 @@ use candle_transformers::models::qwen3::{Config, ModelForCausalLM};
 use minijinja::{Environment, Value as MiniJinjaValue, context};
 use serde_json::{Value};
 use tokenizers::tokenizer::Tokenizer;
-use crate::utils::get_device;
+use crate::utils::{get_device, get_template};
 
 // 主请求结构体
 #[derive(Debug, serde::Deserialize)]
@@ -54,7 +54,6 @@ pub struct Qwen3<'a> {
     model: ModelForCausalLM,
     logits_processor: LogitsProcessor,
     jinja_env: Environment<'a>,
-    pub chat_template: String,
     device: Device,
     max_generate: usize,
     repeat_penalty: f32,
@@ -98,17 +97,9 @@ impl<'a> Qwen3<'a> {
             .map_err(|e| Error::Msg(format!("load config file error:{}", e)))?;
         let model = ModelForCausalLM::new(&config, vb)?;
         let logits_processor = LogitsProcessor::new(299792458, None, None);
-        let tokenizer_config_file = path.clone() + "/tokenizer_config.json";
-        assert!(
-            std::path::Path::new(&tokenizer_config_file).exists(),
-            "tokenizer_config.json not exists in model path"
-        );
-        let tokenizer_config: Value =
-            serde_json::from_slice(&std::fs::read(tokenizer_config_file)?)
-                .map_err(|e| Error::Msg(format!("load tokenizer_config file error:{}", e)))?;
-        let chat_template = tokenizer_config["chat_template"]
-            .as_str()
-            .ok_or(Error::Msg(format!("chat_template to str error")))?;
+        // let tokenizer_config_file = path.clone() + "/tokenizer_config.json";
+        // let template = get_template(tokenizer_config_file)?;
+        
         let mut env = Environment::new();
 
         // 添加自定义方法
@@ -124,22 +115,13 @@ impl<'a> Qwen3<'a> {
         env.add_filter("tojson", |v: MiniJinjaValue| {
             serde_json::to_string(&v).unwrap()
         });
-        // 修复模板中的问题行
-        let fixed_template = chat_template
-            .replace(
-                "message.content.startswith('<tool_response>')",
-                "str_startswith(message.content, '<tool_response>')",
-            )
-            .replace(
-                "message.content.endswith('</tool_response>')",
-                "str_endswith(message.content, '</tool_response>')",
-            );
+        let _ = env.add_template("chat", include_str!("chat_template.jinja"));
+        
         Ok(Self {
             tokenizer,
             model,
             logits_processor,
             jinja_env: env,
-            chat_template: fixed_template,
             device,
             max_generate,
             repeat_penalty,
@@ -179,6 +161,11 @@ impl<'a> Qwen3<'a> {
                 )?
             };
             let next_token = self.logits_processor.sample(&logits)?;
+            let decode = self
+                .tokenizer
+                .decode(&[next_token], true)
+                .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?;
+            println!("decode {}", decode);
             tokens.push(next_token);
             if matches!(self.eos_token1, Some(eos_token) if eos_token == next_token)
                 || matches!(self.eos_token2, Some(eos_token) if eos_token == next_token)
@@ -202,7 +189,7 @@ impl<'a> Qwen3<'a> {
             messages => &request.messages,
             tools => &request.tools.as_ref(),
             add_generation_prompt => true,
-            enable_thinking => true
+            enable_thinking => false
         };
         let template = self.jinja_env.get_template("chat").unwrap();
         let message_str = template
