@@ -14,10 +14,10 @@ pub(crate) async fn chat(req: String) -> (ContentType, TextStream<impl Stream<It
                 while let Some(resp) = boxed_stream.next().await {
                     yield format!("event: message\ndata: {}\n\n", resp);
                 }
-                yield "event: abort\n".to_string()
+                yield format!("event: message\ndata: {}\n\n", "[DONE]");
             }
-            Err(_) => {
-                yield "Error: Failed to create chat stream".to_string();
+            Err(e) => {
+                yield format!("event: error\ndata: {}\n\n", e.to_string());
             }
         }
     };

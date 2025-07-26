@@ -7,7 +7,9 @@ use minijinja::{Environment, Value as MiniJinjaValue, context};
 use rocket::async_stream::stream;
 use rocket::futures::Stream;
 use serde_json::Value;
+use std::sync::{Arc, Mutex};
 use tokenizers::tokenizer::Tokenizer;
+use tokio::sync::RwLock;
 
 // 主请求结构体
 #[derive(Debug, serde::Deserialize)]
@@ -53,8 +55,8 @@ pub fn str_endswith(s: &str, suffix: &str) -> bool {
 
 pub struct Qwen3<'a> {
     tokenizer: Tokenizer,
-    model: ModelForCausalLM,
-    logits_processor: LogitsProcessor,
+    model: Arc<RwLock<ModelForCausalLM>>,
+    logits_processor: Arc<RwLock<LogitsProcessor>>,
     jinja_env: Environment<'a>,
     device: Device,
     max_generate: usize,
@@ -126,8 +128,8 @@ impl<'a> Qwen3<'a> {
 
         Ok(Self {
             tokenizer,
-            model,
-            logits_processor,
+            model: Arc::new(RwLock::new(model)),
+            logits_processor: Arc::new(RwLock::new(logits_processor)),
             jinja_env: env,
             device,
             max_generate,
@@ -138,7 +140,7 @@ impl<'a> Qwen3<'a> {
         })
     }
 
-    pub fn infer(&mut self, message_str: String) -> anyhow::Result<impl Stream<Item = String>> {
+    pub fn infer(&self, message_str: String) -> anyhow::Result<impl Stream<Item = String>> {
         let mut tokens = self
             .tokenizer
             .encode(message_str, true)
@@ -148,7 +150,7 @@ impl<'a> Qwen3<'a> {
         let input_len = tokens.len();
         let stream = stream! {
             for index in 0..self.max_generate {
-                let next_token = self.next_token(index,&mut tokens);
+                let next_token = self.next_token(index,&mut tokens).await;
                 if let Err(e) = next_token{
                     log::error!("model error: {}", e);
                     yield format!("model error: {}", e.to_string());
@@ -171,19 +173,17 @@ impl<'a> Qwen3<'a> {
                     break;
                 }
             }
-
-            self.model.clear_kv_cache();
         };
 
         Ok(stream)
     }
 
-    fn next_token(&mut self, index: usize, tokens: &mut Vec<u32>) -> Result<u32> {
+    async fn next_token(&self, index: usize, tokens: &mut Vec<u32>) -> anyhow::Result<u32> {
         let context_size = if index > 0 { 1 } else { tokens.len() };
         let start_pos = tokens.len().saturating_sub(context_size);
         let ctxt = &tokens[start_pos..];
         let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-        let logits = self.model.forward(&input, start_pos)?;
+        let logits = self.model.write().await.forward(&input, start_pos)?;
         let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
         let logits = if self.repeat_penalty == 1. {
             logits
@@ -195,11 +195,11 @@ impl<'a> Qwen3<'a> {
                 &tokens[start_at..],
             )?
         };
-        let next_token = self.logits_processor.sample(&logits)?;
+        let next_token = self.logits_processor.write().await.sample(&logits)?;
         Ok(next_token)
     }
 
-    pub fn generate_stream(
+    pub async fn generate_stream(
         &mut self,
         messages: String,
     ) -> anyhow::Result<impl Stream<Item = String>> {
@@ -211,10 +211,13 @@ impl<'a> Qwen3<'a> {
             add_generation_prompt => true,
             enable_thinking => false
         };
-        let template = self.jinja_env.get_template("chat").unwrap();
+        let template = self.jinja_env.get_template("chat")?;
         let message_str = template
             .render(context)
             .map_err(|e| Error::Msg(format!("failed to render chat template: {}", e)))?;
-        self.infer(message_str)
+
+        let stream = self.infer(message_str);
+        self.model.write().await.clear_kv_cache();
+        stream
     }
 }

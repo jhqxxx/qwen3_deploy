@@ -41,7 +41,7 @@ pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> 
     };
 
     Ok(stream! {
-        match model_ref.write().await.generate_stream(message.to_string()) {
+        match model_ref.write().await.generate_stream(message.to_string()).await {
             Ok(inner_stream) => {
                 let mut pinned_stream = pin!(inner_stream);
                 while let Some(token) = pinned_stream.next().await {
