@@ -1,7 +1,7 @@
 use crate::qwen3::Qwen3;
 use openai_dive::v1::resources::chat::{
     ChatCompletionChunkChoice, ChatCompletionChunkResponse, ChatMessage, ChatMessageContent,
-    DeltaChatMessage,
+    DeltaChatMessage, DeltaFunction, DeltaToolCall,
 };
 use rocket::async_stream::stream;
 use rocket::futures::{Stream, StreamExt};
@@ -43,19 +43,27 @@ pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> 
     Ok(stream! {
         match model_ref.write().await.generate_stream(message.to_string()).await {
             Ok(inner_stream) => {
-                let mut pinned_stream = pin!(inner_stream);
+                let mut pinned_stream = Box::pin(inner_stream);
+                let tool_calling = false;
+                let mut tool_call_id = None;
+                let mut tool_call_content = String::new();
                 while let Some(token) = pinned_stream.next().await {
-                    let choice = ChatCompletionChunkChoice {
-                        index: Some(0),
-                        delta: DeltaChatMessage::Assistant {
-                            content: Some(ChatMessageContent::Text(token)),
-                            reasoning_content: None,
-                            refusal: None,
-                            name: None,
-                            tool_calls: None,
-                        },
-                        finish_reason: None,
-                        logprobs: None,
+                    let choice = if token.as_str() == "<tool_call>"{
+                        tool_call_id = Some(uuid::Uuid::new_v4().to_string());
+                        continue;
+                    }else{
+                        if token.as_str() == "</tool_call>"{
+                            let choice = build_choice(token,tool_call_id.clone(),Some(tool_call_content.clone()));
+                            tool_call_id = None;
+                            choice
+                        }else{
+                            if tool_call_id.is_some(){
+                                tool_call_content.push_str(&token);
+                                continue;
+                            }else{
+                                build_choice(token,None,None)
+                            }
+                        }
                     };
                     let mut resp = response.clone();
                     resp.choices.push(choice);
@@ -67,6 +75,68 @@ pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> 
             }
         }
     })
+}
+
+fn build_choice(
+    token: String,
+    tool_call_id: Option<String>,
+    tool_call_content: Option<String>,
+) -> ChatCompletionChunkChoice {
+    if tool_call_id.is_some() {
+        let tool_call_id = tool_call_id.unwrap();
+        let function = if let Some(content) = tool_call_content {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(json_value) => {
+                    let name = json_value
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    let arguments = json_value.get("arguments").map(|v| v.to_string());
+
+                    DeltaFunction { name, arguments }
+                }
+                Err(_) => DeltaFunction {
+                    name: None,
+                    arguments: Some(content),
+                },
+            }
+        } else {
+            DeltaFunction {
+                name: None,
+                arguments: None,
+            }
+        };
+        return ChatCompletionChunkChoice {
+            index: Some(0),
+            delta: DeltaChatMessage::Assistant {
+                content: None,
+                reasoning_content: None,
+                refusal: None,
+                name: None,
+                tool_calls: Some(vec![DeltaToolCall {
+                    index: Some(0),
+                    id: Some(tool_call_id),
+                    r#type: Some("function".to_string()),
+                    function,
+                }]),
+            },
+            finish_reason: None,
+            logprobs: None,
+        };
+    }
+    ChatCompletionChunkChoice {
+        index: Some(0),
+        delta: DeltaChatMessage::Assistant {
+            content: Some(ChatMessageContent::Text(token)),
+            reasoning_content: None,
+            refusal: None,
+            name: None,
+            tool_calls: None,
+        },
+        finish_reason: None,
+        logprobs: None,
+    }
 }
 
 mod tests {
