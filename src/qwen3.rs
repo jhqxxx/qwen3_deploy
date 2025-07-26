@@ -1,3 +1,4 @@
+use std::fs;
 use crate::utils::{get_device, get_template};
 use candle_core::{DType, Device, Error, Result, Tensor, bail};
 use candle_nn::VarBuilder;
@@ -90,13 +91,11 @@ impl<'a> Qwen3<'a> {
         let eos_token1 = tokenizer.get_vocab(true).get("<|endoftext|>").copied();
         let eos_token2 = tokenizer.get_vocab(true).get("<|im_end|>").copied();
         let device = get_device()?;
-        let weight_file = path.clone() + "/model.safetensors";
-        assert!(
-            std::path::Path::new(&weight_file).exists(),
-            "model.safetensors not exists in model path"
-        );
+        let weight_files = Self::find_safetensors_files(&path)?;
+        //let weight_file = path.clone() + "/model.safetensors";
+        assert_ne!(weight_files.len(), 0, "no safetensors files found");
         let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weight_file], DType::F16, &device)? };
+            unsafe { VarBuilder::from_mmaped_safetensors(&weight_files, DType::F16, &device)? };
         let config_file = path.clone() + "/config.json";
         assert!(
             std::path::Path::new(&config_file).exists(),
@@ -140,6 +139,25 @@ impl<'a> Qwen3<'a> {
         })
     }
 
+
+    fn find_safetensors_files(path: &str) -> anyhow::Result<Vec<String>> {
+        let mut files = Vec::new();
+
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let file_path = entry.path();
+
+            if file_path.is_file() {
+                if let Some(extension) = file_path.extension() {
+                    if extension == "safetensors" {
+                        files.push(file_path.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+
+        Ok(files)
+    }
     pub fn infer(&self, message_str: String) -> anyhow::Result<impl Stream<Item = String>> {
         let mut tokens = self
             .tokenizer

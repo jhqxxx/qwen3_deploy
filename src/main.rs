@@ -32,6 +32,7 @@ pub async fn start_http_server(port: u16, model_path: String) -> anyhow::Result<
     let mut builder = rocket::build().configure(Config {
         port,
         limits: Limits::default()
+            .limit("string", ByteUnit::Mebibyte(5))
             .limit("json", ByteUnit::Mebibyte(5))
             .limit("data-form", ByteUnit::Mebibyte(100))
             .limit("file", ByteUnit::Mebibyte(100)),
