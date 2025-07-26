@@ -134,7 +134,6 @@ impl<'a> Qwen3<'a> {
                 "message.content.endswith('</tool_response>')",
                 "str_endswith(message.content, '</tool_response>')",
             );
-
         Ok(Self {
             tokenizer,
             model,
@@ -192,6 +191,7 @@ impl<'a> Qwen3<'a> {
             .tokenizer
             .decode(&tokens[input_len..all_tokens], true)
             .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?;
+        self.model.clear_kv_cache();
         Ok(decode)
     }
 
