@@ -1,11 +1,13 @@
+use crate::utils::{get_device, get_template};
 use candle_core::{DType, Device, Error, Result, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::qwen3::{Config, ModelForCausalLM};
 use minijinja::{Environment, Value as MiniJinjaValue, context};
-use serde_json::{Value};
+use rocket::async_stream::stream;
+use rocket::futures::Stream;
+use serde_json::Value;
 use tokenizers::tokenizer::Tokenizer;
-use crate::utils::{get_device, get_template};
 
 // 主请求结构体
 #[derive(Debug, serde::Deserialize)]
@@ -64,9 +66,14 @@ pub struct Qwen3<'a> {
 
 impl<'a> Qwen3<'a> {
     pub fn new(path: String) -> Result<Self> {
-        Qwen3::new_with_param(path, 10000, 1.1, 64)
+        Qwen3::new_with_param(path, 81920, 1.1, 64)
     }
-    pub fn new_with_param(path: String, max_generate: usize, repeat_penalty: f32, repeat_last_n: usize) -> Result<Self> {
+    pub fn new_with_param(
+        path: String,
+        max_generate: usize,
+        repeat_penalty: f32,
+        repeat_last_n: usize,
+    ) -> Result<Self> {
         assert!(
             std::path::Path::new(&path).exists(),
             "model path file not exists"
@@ -99,7 +106,7 @@ impl<'a> Qwen3<'a> {
         let logits_processor = LogitsProcessor::new(299792458, None, None);
         // let tokenizer_config_file = path.clone() + "/tokenizer_config.json";
         // let template = get_template(tokenizer_config_file)?;
-        
+
         let mut env = Environment::new();
 
         // 添加自定义方法
@@ -116,7 +123,7 @@ impl<'a> Qwen3<'a> {
             serde_json::to_string(&v).unwrap()
         });
         let _ = env.add_template("chat", include_str!("chat_template.jinja"));
-        
+
         Ok(Self {
             tokenizer,
             model,
@@ -131,11 +138,7 @@ impl<'a> Qwen3<'a> {
         })
     }
 
-    pub fn add_template(&mut self, name: &'a str, source: &'a str) {
-        let _ = self.jinja_env.add_template(name, source);
-    }
-
-    pub fn infer(&mut self, message_str: String) -> Result<String> {
+    pub fn infer(&mut self, message_str: String) -> Result<impl Stream<Item = String>> {
         let mut tokens = self
             .tokenizer
             .encode(message_str, true)
@@ -143,46 +146,60 @@ impl<'a> Qwen3<'a> {
             .get_ids()
             .to_vec();
         let input_len = tokens.len();
-        for index in 0..self.max_generate {
-            let context_size = if index > 0 { 1 } else { tokens.len() };
-            let start_pos = tokens.len().saturating_sub(context_size);
-            let ctxt = &tokens[start_pos..];
-            let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, start_pos)?;
-            let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
-            let logits = if self.repeat_penalty == 1. {
-                logits
-            } else {
-                let start_at = tokens.len().saturating_sub(self.repeat_last_n);
-                candle_transformers::utils::apply_repeat_penalty(
-                    &logits,
-                    self.repeat_penalty,
-                    &tokens[start_at..],
-                )?
-            };
-            let next_token = self.logits_processor.sample(&logits)?;
-            let decode = self
-                .tokenizer
-                .decode(&[next_token], true)
-                .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?;
-            println!("decode {}", decode);
-            tokens.push(next_token);
-            if matches!(self.eos_token1, Some(eos_token) if eos_token == next_token)
-                || matches!(self.eos_token2, Some(eos_token) if eos_token == next_token)
-            {
-                break;
+        let stream = stream! {
+            for index in 0..self.max_generate {
+                let next_token = self.next_token(index,&mut tokens);
+                if let Err(e) = next_token{
+                    log::error!("model error: {}", e);
+                    yield format!("model error: {}", e.to_string());
+                    break;
+                }
+
+                let next_token = next_token.unwrap();
+                let decoded_token = self
+                    .tokenizer
+                    .decode(&[next_token], true)
+                    .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e))).unwrap();
+
+                yield decoded_token.clone();
+
+                tokens.push(next_token);
+
+                if matches!(self.eos_token1, Some(eos_token) if eos_token == next_token)
+                    || matches!(self.eos_token2, Some(eos_token) if eos_token == next_token)
+                {
+                    break;
+                }
             }
-        }
-        let all_tokens = tokens.len();
-        let decode = self
-            .tokenizer
-            .decode(&tokens[input_len..all_tokens], true)
-            .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?;
-        self.model.clear_kv_cache();
-        Ok(decode)
+
+            self.model.clear_kv_cache();
+        };
+
+        Ok(stream)
     }
 
-    pub fn generate(&mut self, messages: String) -> Result<String> {
+    fn next_token(&mut self, index: usize, tokens: &mut Vec<u32>) -> Result<u32> {
+        let context_size = if index > 0 { 1 } else { tokens.len() };
+        let start_pos = tokens.len().saturating_sub(context_size);
+        let ctxt = &tokens[start_pos..];
+        let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
+        let logits = self.model.forward(&input, start_pos)?;
+        let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
+        let logits = if self.repeat_penalty == 1. {
+            logits
+        } else {
+            let start_at = tokens.len().saturating_sub(self.repeat_last_n);
+            candle_transformers::utils::apply_repeat_penalty(
+                &logits,
+                self.repeat_penalty,
+                &tokens[start_at..],
+            )?
+        };
+        let next_token = self.logits_processor.sample(&logits)?;
+        Ok(next_token)
+    }
+
+    pub fn generate_stream(&mut self, messages: String) -> Result<impl Stream<Item = String>> {
         let request: ChatRequest = serde_json::from_str(&messages)
             .map_err(|e| Error::Msg(format!("Failed to parse request JSON: {}", e)))?;
         let context = context! {

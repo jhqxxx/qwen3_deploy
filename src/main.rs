@@ -1,58 +1,48 @@
-use candle_core::{Result};
-mod qwen3;
-use qwen3::Qwen3;
+#[macro_use]
+extern crate rocket;
+
+use clap::Parser;
+use rocket::Config;
+use rocket::data::{ByteUnit, Limits};
+
+
+use qwen3_deploy::init;
+
+mod api;
 mod utils;
 
-                // "content": "图片里有什么？图片地址：[\"data/chat/kb/17992851581189image_1753331929967.png\"]"
-fn main() -> Result<()> {
-    let model_path = "/mnt/c/jhq/huggingface_model/Qwen/Qwen3-0___6B/".to_string();
-    let mut model = Qwen3::new(model_path)?;
-    let request_json = r#"
-    {
-        "messages": [
-            {
-                "role": "user",
-                "content": "你好啊"
-            }
-        ],
-        "model": "deepseek-chat",
-        "response_format": {
-            "type": "text"
-        },
-        "stream": true,
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "image-qa-onlineA-_-Achat_to_image",
-                    "description": "chat anything with image",
-                    "parameters": {
-                        "$schema": "http://json-schema.org/draft-07/schema#",
-                        "properties": {
-                            "image_paths": {
-                                "items": {
-                                    "type": "string"
-                                },
-                                "type": "array"
-                            },
-                            "prompt": {
-                                "type": "string"
-                            }
-                        },
-                        "required": [
-                            "prompt",
-                            "image_paths"
-                        ],
-                        "title": "Req",
-                        "type": "object"
-                    }
-                }
-            }
-        ],
-        "tool_choice": null
-    }
-    "#;
-    let response = model.generate(request_json.to_string())?;
-    println!("generate: \n {}", response);
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[arg(short, long, default_value_t = 10100)]
+    port: u16,
+
+    #[arg(short, long)]
+    model_path: String,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    start_http_server(args.port, args.model_path).await?;
+    Ok(())
+}
+
+pub async fn start_http_server(port: u16, model_path: String) -> anyhow::Result<()> {
+    let mut builder = rocket::build().configure(Config {
+        port,
+        limits: Limits::default()
+            .limit("json", ByteUnit::Mebibyte(5))
+            .limit("data-form", ByteUnit::Mebibyte(100))
+            .limit("file", ByteUnit::Mebibyte(100)),
+        ..Config::debug_default()
+    });
+
+    // 知识库
+    builder = builder.mount("/chat", routes![api::chat]);
+
+    init(&model_path)?;
+
+    builder.launch().await?;
     Ok(())
 }
