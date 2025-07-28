@@ -1,4 +1,3 @@
-use std::fs;
 use crate::utils::{get_device, get_template};
 use candle_core::{DType, Device, Error, Result, Tensor, bail};
 use candle_nn::VarBuilder;
@@ -8,6 +7,7 @@ use minijinja::{Environment, Value as MiniJinjaValue, context};
 use rocket::async_stream::stream;
 use rocket::futures::Stream;
 use serde_json::Value;
+use std::fs;
 use std::sync::{Arc, Mutex};
 use tokenizers::tokenizer::Tokenizer;
 use tokio::sync::RwLock;
@@ -68,14 +68,15 @@ pub struct Qwen3<'a> {
 }
 
 impl<'a> Qwen3<'a> {
-    pub fn new(path: String) -> anyhow::Result<Self> {
-        Qwen3::new_with_param(path, 81920, 1.1, 64)
+    pub fn new(path: String, is_cpu: bool) -> anyhow::Result<Self> {
+        Qwen3::new_with_param(path, 81920, 1.1, 64, is_cpu)
     }
     pub fn new_with_param(
         path: String,
         max_generate: usize,
         repeat_penalty: f32,
         repeat_last_n: usize,
+        is_cpu: bool,
     ) -> anyhow::Result<Self> {
         assert!(
             std::path::Path::new(&path).exists(),
@@ -90,7 +91,7 @@ impl<'a> Qwen3<'a> {
             .map_err(|e| Error::Msg(format!("tokenizer from file error:{}", e)))?;
         let eos_token1 = tokenizer.get_vocab(true).get("<|endoftext|>").copied();
         let eos_token2 = tokenizer.get_vocab(true).get("<|im_end|>").copied();
-        let device = get_device()?;
+        let device = if is_cpu { Device::Cpu } else { get_device()? };
         let weight_files = Self::find_safetensors_files(&path)?;
         //let weight_file = path.clone() + "/model.safetensors";
         assert_ne!(weight_files.len(), 0, "no safetensors files found");
@@ -138,7 +139,6 @@ impl<'a> Qwen3<'a> {
             eos_token2,
         })
     }
-
 
     fn find_safetensors_files(path: &str) -> anyhow::Result<Vec<String>> {
         let mut files = Vec::new();
