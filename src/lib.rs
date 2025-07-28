@@ -18,7 +18,7 @@ const MODEL_NAME: &str = "qwen3-0.6b";
 static MODEL: OnceLock<Arc<RwLock<Qwen3>>> = OnceLock::new();
 pub fn init(path: &str) -> anyhow::Result<()> {
     let model_path = path.to_string();
-    let model = Qwen3::new(model_path)?;
+    let model = Qwen3::new(model_path, false)?;
     MODEL.get_or_init(|| Arc::new(RwLock::new(model)));
     Ok(())
 }
