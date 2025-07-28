@@ -166,6 +166,7 @@ impl<'a> Qwen3<'a> {
             .get_ids()
             .to_vec();
         let input_len = tokens.len();
+        let mut error_tokens = Vec::new();
         let stream = stream! {
             for index in 0..self.max_generate {
                 let next_token = self.next_token(index,&mut tokens).await;
@@ -176,14 +177,26 @@ impl<'a> Qwen3<'a> {
                 }
 
                 let next_token = next_token.unwrap();
+                tokens.push(next_token);
+
+                let mut decode_ids = Vec::new();
+                if error_tokens.len() > 0 {
+                    decode_ids.extend_from_slice(&error_tokens);
+                }
+                decode_ids.push(next_token);
                 let decoded_token = self
                     .tokenizer
-                    .decode(&[next_token], true)
+                    .decode(&decode_ids, true)
                     .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e))).unwrap();
-
+                if decoded_token.contains("�") {
+                    error_tokens.push(next_token);
+                    if error_tokens.len() > 3 {
+                        error_tokens.clear();
+                    }
+                    continue;
+                }
+                error_tokens.clear();
                 yield decoded_token.clone();
-
-                tokens.push(next_token);
 
                 if matches!(self.eos_token1, Some(eos_token) if eos_token == next_token)
                     || matches!(self.eos_token2, Some(eos_token) if eos_token == next_token)
