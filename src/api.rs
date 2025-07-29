@@ -24,7 +24,6 @@ where
         }
     }
 }
-// 为 Response 枚举实现 Responder trait
 #[post("/completions", data = "<req>")]
 pub(crate) async fn chat(req: String) -> (ContentType, Response<impl Stream<Item = String>>) {
     let stream = TextStream! {
