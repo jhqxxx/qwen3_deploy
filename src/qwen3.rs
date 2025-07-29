@@ -1,4 +1,5 @@
 use crate::utils::{get_device, get_template};
+use crate::ChatRequest;
 use candle_core::{DType, Device, Error, Result, Tensor, bail};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
@@ -6,44 +7,12 @@ use candle_transformers::models::qwen3::{Config, ModelForCausalLM};
 use minijinja::{Environment, Value as MiniJinjaValue, context};
 use rocket::async_stream::stream;
 use rocket::futures::Stream;
-use serde_json::Value;
+
 use std::fs;
 use std::sync::{Arc, Mutex};
 use tokenizers::tokenizer::Tokenizer;
 use tokio::sync::RwLock;
 
-// 主请求结构体
-#[derive(Debug, serde::Deserialize)]
-pub struct ChatRequest {
-    messages: Vec<Message>,
-    tools: Option<Vec<Tool>>,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-pub struct Message {
-    role: String,
-    content: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
-}
-
-// 工具定义结构体
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-pub struct Tool {
-    #[serde(rename = "type")]
-    tool_type: String,
-    function: Function,
-}
-
-// 函数定义结构体
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-pub struct Function {
-    name: String,
-    description: String,
-    parameters: Value,
-}
 
 // 自定义字符串方法实现
 pub fn str_startswith(s: &str, prefix: &str) -> bool {
@@ -158,7 +127,7 @@ impl<'a> Qwen3<'a> {
 
         Ok(files)
     }
-    pub fn infer(&self, message_str: String) -> anyhow::Result<impl Stream<Item = String>> {
+    pub fn infer_stream(&self, message_str: String) -> anyhow::Result<impl Stream<Item = String>> {
         let mut tokens = self
             .tokenizer
             .encode(message_str, true)
@@ -230,25 +199,59 @@ impl<'a> Qwen3<'a> {
         Ok(next_token)
     }
 
-    pub async fn generate_stream(
-        &mut self,
-        messages: String,
-    ) -> anyhow::Result<impl Stream<Item = String>> {
-        let request: ChatRequest = serde_json::from_str(&messages)
-            .map_err(|e| Error::Msg(format!("Failed to parse request JSON: {}", e)))?;
+    fn render_template(&mut self, request: &ChatRequest) -> anyhow::Result<String> {
         let context = context! {
             messages => &request.messages,
             tools => &request.tools.as_ref(),
             add_generation_prompt => true,
-            enable_thinking => false
+            enable_thinking => true
         };
         let template = self.jinja_env.get_template("chat")?;
         let message_str = template
             .render(context)
             .map_err(|e| Error::Msg(format!("failed to render chat template: {}", e)))?;
+        Ok(message_str)
+    }
 
-        let stream = self.infer(message_str);
+    pub async fn generate_stream(
+        &mut self,
+        request: &ChatRequest,
+    ) -> anyhow::Result<impl Stream<Item = String>> {
+        let message_str = self.render_template(request)?;
+        let stream = self.infer_stream(message_str);
         self.model.write().await.clear_kv_cache();
         stream
     }
+
+    pub async fn infer(&mut self, message_str: String) -> anyhow::Result<String> {
+        let mut tokens = self
+            .tokenizer
+            .encode(message_str, true)
+            .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?
+            .get_ids()
+            .to_vec();
+        let input_len = tokens.len();
+        for index in 0..self.max_generate {
+            let next_token = self.next_token(index,&mut tokens).await?;
+            tokens.push(next_token);
+            if matches!(self.eos_token1, Some(eos_token) if eos_token == next_token)
+                || matches!(self.eos_token2, Some(eos_token) if eos_token == next_token)
+            {
+                break;
+            }
+        }
+        let all_tokens = tokens.len();
+        let decode = self
+            .tokenizer
+            .decode(&tokens[input_len..all_tokens], true)
+            .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?;
+        Ok(decode)
+    }
+
+    pub async fn generate(&mut self, request: &ChatRequest) -> anyhow::Result<String> {
+        let message_str = self.render_template(request)?;
+        self.model.write().await.clear_kv_cache();
+        self.infer(message_str).await
+    }
+
 }

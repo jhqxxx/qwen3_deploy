@@ -1,14 +1,18 @@
 use crate::qwen3::Qwen3;
 use openai_dive::v1::resources::chat::{
-    ChatCompletionChunkChoice, ChatCompletionChunkResponse, ChatMessage, ChatMessageContent,
-    DeltaChatMessage, DeltaFunction, DeltaToolCall,
+    ChatCompletionChunkChoice, ChatCompletionChunkResponse, 
+    ChatCompletionResponse, ChatCompletionChoice, ChatMessage, ChatMessageContent,
+    DeltaChatMessage, DeltaFunction, DeltaToolCall, ToolCall, Function as ChatFunction
 };
+use openai_dive::v1::resources::shared::FinishReason;
 use rocket::async_stream::stream;
 use rocket::futures::{Stream, StreamExt};
+use rocket::response::content;
 use std::pin::pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::RwLock;
 use uuid::uuid;
+use serde_json::Value;
 
 mod qwen3;
 mod utils;
@@ -16,6 +20,41 @@ mod utils;
 const MODEL_NAME: &str = "qwen3-0.6b";
 
 static MODEL: OnceLock<Arc<RwLock<Qwen3>>> = OnceLock::new();
+
+// 主请求结构体
+#[derive(Debug, serde::Deserialize)]
+pub struct ChatRequest {
+    messages: Vec<Message>,
+    tools: Option<Vec<Tool>>,
+    pub stream: Option<bool>
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct Message {
+    role: String,
+    content: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+// 工具定义结构体
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct Tool {
+    #[serde(rename = "type")]
+    tool_type: String,
+    function: Function,
+}
+
+// 函数定义结构体
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct Function {
+    name: String,
+    description: String,
+    parameters: Value,
+}
+
 pub fn init(path: &str) -> anyhow::Result<()> {
     let model_path = path.to_string();
     let model = Qwen3::new(model_path, false)?;
@@ -23,7 +62,7 @@ pub fn init(path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> {
+pub fn chat_stream(message: &ChatRequest) -> anyhow::Result<impl Stream<Item = String>> {
     let model_ref = MODEL
         .get()
         .cloned()
@@ -41,7 +80,7 @@ pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> 
     };
 
     Ok(stream! {
-        match model_ref.write().await.generate_stream(message.to_string()).await {
+        match model_ref.write().await.generate_stream(message).await {
             Ok(inner_stream) => {
                 let mut pinned_stream = Box::pin(inner_stream);
                 let tool_calling = false;
@@ -53,7 +92,7 @@ pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> 
                         continue;
                     }else{
                         if token.as_str() == "</tool_call>"{
-                            let choice = build_choice(token,tool_call_id.clone(),Some(tool_call_content.clone()));
+                            let choice = build_chunk_choice(token,tool_call_id.clone(),Some(tool_call_content.clone()));
                             tool_call_id = None;
                             choice
                         }else{
@@ -61,7 +100,7 @@ pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> 
                                 tool_call_content.push_str(&token);
                                 continue;
                             }else{
-                                build_choice(token,None,None)
+                                build_chunk_choice(token,None,None)
                             }
                         }
                     };
@@ -77,7 +116,8 @@ pub fn chat_stream(message: &str) -> anyhow::Result<impl Stream<Item = String>> 
     })
 }
 
-fn build_choice(
+
+fn build_chunk_choice(
     token: String,
     tool_call_id: Option<String>,
     tool_call_content: Option<String>,
@@ -139,9 +179,91 @@ fn build_choice(
     }
 }
 
+pub async fn chat_sync(message: &ChatRequest) -> anyhow::Result<String> {
+    let model_ref = MODEL
+        .get()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("model not init"))?;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut response = ChatCompletionResponse {
+        id: Some(id),
+        choices: vec![],
+        created: chrono::Utc::now().timestamp() as u32,
+        model: MODEL_NAME.to_string(),
+        service_tier: None,
+        system_fingerprint: None,
+        object: "chat.completion".to_string(),
+        usage: None,
+    };
+
+    let generate_str = model_ref.write().await.generate(message).await?;
+    let choice: ChatCompletionChoice = build_choice(generate_str);
+    response.choices.push(choice);
+    let response_str = serde_json::to_string(&response).unwrap();
+    Ok(response_str)
+}
+fn build_choice(token: String) -> ChatCompletionChoice {
+    if token.contains("<tool_call>") {
+        let mes: Vec<&str> = token.split("<tool_call>").collect();
+        let content = mes[0].to_string();
+        let tool_mes = mes[1].replace("</tool_call>", "");
+        let function = match serde_json::from_str::<serde_json::Value>(&tool_mes) {
+                Ok(json_value) => {
+                    let name = json_value
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()).unwrap_or_default();
+
+                    let arguments = json_value.get("arguments").map(|v| v.to_string()).unwrap_or_default();
+
+                    ChatFunction { name, arguments }
+                }
+                Err(_) => ChatFunction {
+                    name: "".to_string(),
+                    arguments: "".to_string(),
+                },
+            };
+        let tool_call = ToolCall {
+            id: "0".to_string(),
+            r#type: "function".to_string(),
+            function: function
+        };
+        ChatCompletionChoice {
+            index: 0,
+            message: ChatMessage::Assistant {
+                content: Some(ChatMessageContent::Text(content)),
+                reasoning_content: None,
+                refusal: None,
+                name: None,
+                audio: None,
+                tool_calls: Some(vec![tool_call]),
+            },
+            finish_reason: Some(FinishReason::ToolCalls),
+            logprobs: None,
+        }
+    } else {
+        ChatCompletionChoice {
+            index: 0,
+            message: ChatMessage::Assistant {
+                content: Some(ChatMessageContent::Text(token)),
+                reasoning_content: None,
+                refusal: None,
+                name: None,
+                audio: None,
+                tool_calls: None,
+            },
+            finish_reason: Some(FinishReason::StopSequenceReached),
+            logprobs: None,
+        }
+    }    
+}
+
 mod tests {
     use crate::chat_stream;
+    use crate::chat_sync;
     use crate::init;
+    use crate::ChatRequest;
     use rocket::futures::{Stream, StreamExt};
     use std::pin::pin;
 
@@ -152,7 +274,7 @@ mod tests {
         "messages": [
             {
                 "role": "user",
-                "content": "你是谁"
+                "content": "图片里有什么？图片地址：[\"data/chat/kb/17992851581189image_1753331929967.png\"], 必须调用工具"
             }
         ],
         "model": "deepseek-chat",
@@ -192,14 +314,16 @@ mod tests {
         "tool_choice": null
     }
     "#;
-        init("resources/model").unwrap();
+        init("/mnt/c/jhq/huggingface_model/Qwen/Qwen3-0___6B").unwrap();
         let start = std::time::Instant::now();
         println!("开始");
-        let mut stream = pin!(chat_stream(message).unwrap());
-        while let Some(item) = stream.next().await {
-            println!("{}", item);
-        }
-
+        let request: ChatRequest = serde_json::from_str(&message).unwrap();
+        // let mut stream = pin!(chat_stream(&request).unwrap());
+        // while let Some(item) = stream.next().await {
+        //     println!("{}", item);
+        // }
+        let response = chat_sync(&request).await.unwrap();
+        println!("{response}");
         println!("耗时：{}ms", start.elapsed().as_millis());
     }
 }
