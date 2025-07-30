@@ -38,7 +38,7 @@ pub async fn start_http_server(port: u16, model_path: String) -> anyhow::Result<
             .limit("json", ByteUnit::Mebibyte(5))
             .limit("data-form", ByteUnit::Mebibyte(100))
             .limit("file", ByteUnit::Mebibyte(100)),
-        ..Config::debug_default()
+        ..Config::default()
     });
 
     // 知识库
