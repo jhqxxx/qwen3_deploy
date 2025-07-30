@@ -217,17 +217,17 @@ impl<'a> Qwen3<'a> {
         &mut self,
         request: &ChatRequest,
     ) -> anyhow::Result<impl Stream<Item = String>> {
-        let context = context! {
-            messages => &request.messages,
-            tools => &request.tools.as_ref(),
-            add_generation_prompt => true,
-            enable_thinking => true
-        };
-        let template = self.jinja_env.get_template("chat").unwrap();
-        let message_str = template
-            .render(context)
-            .map_err(|e| anyhow::anyhow!(format!("render template  error{}", e)))?;
-        // let message_str = self.render_template(request)?;
+        // let context = context! {
+        //     messages => &request.messages,
+        //     tools => &request.tools.as_ref(),
+        //     add_generation_prompt => true,
+        //     enable_thinking => true
+        // };
+        // let template = self.jinja_env.get_template("chat").unwrap();
+        // let message_str = template
+        //     .render(context)
+        //     .map_err(|e| anyhow::anyhow!(format!("render template  error{}", e)))?;
+        let message_str = self.render_template(request)?;
         let stream = self.infer_stream(message_str);
         stream
     }
