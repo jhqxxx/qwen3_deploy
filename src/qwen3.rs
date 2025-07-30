@@ -25,8 +25,8 @@ pub fn str_endswith(s: &str, suffix: &str) -> bool {
 
 pub struct Qwen3<'a> {
     tokenizer: Tokenizer,
-    model: Arc<RwLock<ModelForCausalLM>>,
-    logits_processor: Arc<RwLock<LogitsProcessor>>,
+    model: ModelForCausalLM,
+    logits_processor: LogitsProcessor,
     jinja_env: Environment<'a>,
     device: Device,
     max_generate: usize,
@@ -95,8 +95,8 @@ impl<'a> Qwen3<'a> {
 
         Ok(Self {
             tokenizer,
-            model: Arc::new(RwLock::new(model)),
-            logits_processor: Arc::new(RwLock::new(logits_processor)),
+            model: model,
+            logits_processor: logits_processor,
             jinja_env: env,
             device,
             max_generate,
@@ -125,7 +125,8 @@ impl<'a> Qwen3<'a> {
 
         Ok(files)
     }
-    pub fn infer_stream(&self, message_str: String) -> anyhow::Result<impl Stream<Item = String>> {
+
+    pub fn infer_stream(&mut self, message_str: String) -> anyhow::Result<impl Stream<Item = String>> {
         let mut tokens = self
             .tokenizer
             .encode(message_str, true)
@@ -134,9 +135,9 @@ impl<'a> Qwen3<'a> {
             .to_vec();
         let mut error_tokens = Vec::new();
         let stream = stream! {
-            self.model.write().await.clear_kv_cache();
+            self.model.clear_kv_cache();
             for index in 0..self.max_generate {
-                let next_token = self.next_token(index,&mut tokens).await;
+                let next_token = self.next_token(index,&mut tokens);
                 if let Err(e) = next_token{
                     log::error!("model error: {}", e);
                     yield format!("model error: {}", e.to_string());
@@ -171,18 +172,19 @@ impl<'a> Qwen3<'a> {
                     break;
                 }
             }
-            self.model.write().await.clear_kv_cache();
+            self.model.clear_kv_cache();
         };
 
         Ok(stream)
     }
 
-    async fn next_token(&self, index: usize, tokens: &mut Vec<u32>) -> anyhow::Result<u32> {
+
+    fn next_token(&mut self, index: usize, tokens: &mut Vec<u32>) -> anyhow::Result<u32> {
         let context_size = if index > 0 { 1 } else { tokens.len() };
         let start_pos = tokens.len().saturating_sub(context_size);
         let ctxt = &tokens[start_pos..];
         let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-        let logits = self.model.write().await.forward(&input, start_pos)?;
+        let logits = self.model.forward(&input, start_pos)?;
         let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
         let logits = if self.repeat_penalty == 1. {
             logits
@@ -194,7 +196,7 @@ impl<'a> Qwen3<'a> {
                 &tokens[start_at..],
             )?
         };
-        let next_token = self.logits_processor.write().await.sample(&logits)?;
+        let next_token = self.logits_processor.sample(&logits)?;
         Ok(next_token)
     }
 
@@ -212,7 +214,7 @@ impl<'a> Qwen3<'a> {
         Ok(message_str)
     }
 
-    pub async fn generate_stream(
+    pub fn generate_stream(
         &mut self,
         request: &ChatRequest,
     ) -> anyhow::Result<impl Stream<Item = String>> {
@@ -221,8 +223,9 @@ impl<'a> Qwen3<'a> {
         stream
     }
 
-    pub async fn infer(&self, message_str: String) -> anyhow::Result<String> {
-        self.model.write().await.clear_kv_cache();
+
+    pub fn infer(&mut self, message_str: String) -> anyhow::Result<String> {
+        self.model.clear_kv_cache();
         let mut tokens = self
             .tokenizer
             .encode(message_str, true)
@@ -231,7 +234,7 @@ impl<'a> Qwen3<'a> {
             .to_vec();
         let input_len = tokens.len();
         for index in 0..self.max_generate {
-            let next_token = self.next_token(index,&mut tokens).await?;
+            let next_token = self.next_token(index,&mut tokens)?;
             tokens.push(next_token);
             if matches!(self.eos_token1, Some(eos_token) if eos_token == next_token)
                 || matches!(self.eos_token2, Some(eos_token) if eos_token == next_token)
@@ -244,13 +247,13 @@ impl<'a> Qwen3<'a> {
             .tokenizer
             .decode(&tokens[input_len..all_tokens], true)
             .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?;
-        self.model.write().await.clear_kv_cache();
+        self.model.clear_kv_cache();
         Ok(decode)
     }
 
-    pub async fn generate(&mut self, request: &ChatRequest) -> anyhow::Result<String> {
+    pub fn generate(&mut self, request: &ChatRequest) -> anyhow::Result<String> {
         let message_str = self.render_template(request)?;        
-        self.infer(message_str).await
+        self.infer(message_str)
     }
 
 }

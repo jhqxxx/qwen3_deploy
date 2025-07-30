@@ -80,7 +80,7 @@ pub fn chat_stream(message: &ChatRequest) -> anyhow::Result<impl Stream<Item = S
     };
 
     Ok(stream! {
-        match model_ref.write().await.generate_stream(message).await {
+        match model_ref.write().await.generate_stream(message) {
             Ok(inner_stream) => {
                 let mut pinned_stream = Box::pin(inner_stream);
                 let mut tool_call_id = None;
@@ -196,7 +196,7 @@ pub async fn chat_sync(message: &ChatRequest) -> anyhow::Result<String> {
         usage: None,
     };
 
-    let generate_str = model_ref.write().await.generate(message).await?;
+    let generate_str = model_ref.write().await.generate(message)?;
     let choice: ChatCompletionChoice = build_choice(generate_str);
     response.choices.push(choice);
     let response_str = serde_json::to_string(&response).unwrap();
