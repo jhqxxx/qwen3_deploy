@@ -83,7 +83,6 @@ pub fn chat_stream(message: &ChatRequest) -> anyhow::Result<impl Stream<Item = S
         match model_ref.write().await.generate_stream(message).await {
             Ok(inner_stream) => {
                 let mut pinned_stream = Box::pin(inner_stream);
-                let tool_calling = false;
                 let mut tool_call_id = None;
                 let mut tool_call_content = String::new();
                 while let Some(token) = pinned_stream.next().await {

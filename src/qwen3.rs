@@ -9,7 +9,7 @@ use rocket::async_stream::stream;
 use rocket::futures::Stream;
 
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use tokenizers::tokenizer::Tokenizer;
 use tokio::sync::RwLock;
 
@@ -62,10 +62,9 @@ impl<'a> Qwen3<'a> {
         let eos_token2 = tokenizer.get_vocab(true).get("<|im_end|>").copied();
         let device = if is_cpu { Device::Cpu } else { get_device()? };
         let weight_files = Self::find_safetensors_files(&path)?;
-        //let weight_file = path.clone() + "/model.safetensors";
         assert_ne!(weight_files.len(), 0, "no safetensors files found");
         let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&weight_files, DType::F16, &device)? };
+            unsafe { VarBuilder::from_mmaped_safetensors(&weight_files, DType::BF16, &device)? };
         let config_file = path.clone() + "/config.json";
         assert!(
             std::path::Path::new(&config_file).exists(),
@@ -75,8 +74,7 @@ impl<'a> Qwen3<'a> {
             .map_err(|e| Error::Msg(format!("load config file error:{}", e)))?;
         let model = ModelForCausalLM::new(&config, vb)?;
         let logits_processor = LogitsProcessor::new(299792458, None, None);
-        // let tokenizer_config_file = path.clone() + "/tokenizer_config.json";
-        // let template = get_template(tokenizer_config_file)?;
+        
 
         let mut env = Environment::new();
 
@@ -134,9 +132,9 @@ impl<'a> Qwen3<'a> {
             .map_err(|e| anyhow::anyhow!(e))?
             .get_ids()
             .to_vec();
-        let input_len = tokens.len();
         let mut error_tokens = Vec::new();
         let stream = stream! {
+            self.model.write().await.clear_kv_cache();
             for index in 0..self.max_generate {
                 let next_token = self.next_token(index,&mut tokens).await;
                 if let Err(e) = next_token{
@@ -173,6 +171,7 @@ impl<'a> Qwen3<'a> {
                     break;
                 }
             }
+            self.model.write().await.clear_kv_cache();
         };
 
         Ok(stream)
@@ -219,11 +218,11 @@ impl<'a> Qwen3<'a> {
     ) -> anyhow::Result<impl Stream<Item = String>> {
         let message_str = self.render_template(request)?;
         let stream = self.infer_stream(message_str);
-        self.model.write().await.clear_kv_cache();
         stream
     }
 
-    pub async fn infer(&mut self, message_str: String) -> anyhow::Result<String> {
+    pub async fn infer(&self, message_str: String) -> anyhow::Result<String> {
+        self.model.write().await.clear_kv_cache();
         let mut tokens = self
             .tokenizer
             .encode(message_str, true)
@@ -245,12 +244,12 @@ impl<'a> Qwen3<'a> {
             .tokenizer
             .decode(&tokens[input_len..all_tokens], true)
             .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?;
+        self.model.write().await.clear_kv_cache();
         Ok(decode)
     }
 
     pub async fn generate(&mut self, request: &ChatRequest) -> anyhow::Result<String> {
-        let message_str = self.render_template(request)?;
-        self.model.write().await.clear_kv_cache();
+        let message_str = self.render_template(request)?;        
         self.infer(message_str).await
     }
 

@@ -45,12 +45,13 @@ pub fn get_device() -> Result<Device> {
 }
 
 pub fn get_template(path: String) -> Result<String> {
+    let tokenizer_config_file = path.clone() + "/tokenizer_config.json";
     assert!(
-        std::path::Path::new(&path).exists(),
+        std::path::Path::new(&tokenizer_config_file).exists(),
         "tokenizer_config.json not exists in model path"
     );
     let tokenizer_config: Value =
-        serde_json::from_slice(&std::fs::read(path)?)
+        serde_json::from_slice(&std::fs::read(tokenizer_config_file)?)
             .map_err(|e| Error::Msg(format!("load tokenizer_config file error:{}", e)))?;
     let chat_template = tokenizer_config["chat_template"]
         .as_str()
