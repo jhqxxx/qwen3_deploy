@@ -105,7 +105,13 @@ pub fn chat_stream(message: &ChatRequest) -> anyhow::Result<impl Stream<Item = S
                     };
                     let mut resp = response.clone();
                     resp.choices.push(choice);
-                    yield serde_json::to_string(&resp).unwrap();
+                    match serde_json::to_string(&resp) {
+                        Ok(json) => yield json,
+                        Err(e) => {
+                            yield format!("Serialization error: {}", e);
+                            break;
+                        }
+                    }
                 }
             }
             Err(e) => {

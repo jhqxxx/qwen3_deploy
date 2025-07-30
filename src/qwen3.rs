@@ -1,6 +1,6 @@
-use crate::utils::{get_device, get_template};
 use crate::ChatRequest;
-use candle_core::{DType, Device, Error, Result, Tensor, bail};
+use crate::utils::{get_device, get_template};
+use candle_core::{DType, Device, Error, Tensor, bail};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::qwen3::{Config, ModelForCausalLM};
@@ -9,10 +9,9 @@ use rocket::async_stream::stream;
 use rocket::futures::Stream;
 
 use std::fs;
-use std::sync::{Arc};
+use std::sync::Arc;
 use tokenizers::tokenizer::Tokenizer;
 use tokio::sync::RwLock;
-
 
 // 自定义字符串方法实现
 pub fn str_startswith(s: &str, prefix: &str) -> bool {
@@ -64,7 +63,7 @@ impl<'a> Qwen3<'a> {
         let weight_files = Self::find_safetensors_files(&path)?;
         assert_ne!(weight_files.len(), 0, "no safetensors files found");
         let vb =
-            unsafe { VarBuilder::from_mmaped_safetensors(&weight_files, DType::BF16, &device)? };
+            unsafe { VarBuilder::from_mmaped_safetensors(&weight_files, DType::F16, &device)? };
         let config_file = path.clone() + "/config.json";
         assert!(
             std::path::Path::new(&config_file).exists(),
@@ -74,7 +73,6 @@ impl<'a> Qwen3<'a> {
             .map_err(|e| Error::Msg(format!("load config file error:{}", e)))?;
         let model = ModelForCausalLM::new(&config, vb)?;
         let logits_processor = LogitsProcessor::new(299792458, None, None);
-        
 
         let mut env = Environment::new();
 
@@ -126,16 +124,18 @@ impl<'a> Qwen3<'a> {
         Ok(files)
     }
 
-    pub fn infer_stream(&mut self, message_str: String) -> anyhow::Result<impl Stream<Item = String>> {
+    pub fn infer_stream(
+        &mut self,
+        message_str: String,
+    ) -> anyhow::Result<impl Stream<Item = String>> {
         let mut tokens = self
             .tokenizer
             .encode(message_str, true)
-            .map_err(|e| anyhow::anyhow!(e))?
+            .map_err(|e| anyhow::anyhow!(format!("stream encode error{}", e)))?
             .get_ids()
             .to_vec();
         let mut error_tokens = Vec::new();
         let stream = stream! {
-            self.model.clear_kv_cache();
             for index in 0..self.max_generate {
                 let next_token = self.next_token(index,&mut tokens);
                 if let Err(e) = next_token{
@@ -155,7 +155,7 @@ impl<'a> Qwen3<'a> {
                 let decoded_token = self
                     .tokenizer
                     .decode(&decode_ids, true)
-                    .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e))).unwrap();
+                    .map_err(|e| anyhow::anyhow!(format!("stream decode error{}", e))).unwrap();
                 if decoded_token.contains("�") {
                     error_tokens.push(next_token);
                     if error_tokens.len() > 3 {
@@ -177,7 +177,6 @@ impl<'a> Qwen3<'a> {
 
         Ok(stream)
     }
-
 
     fn next_token(&mut self, index: usize, tokens: &mut Vec<u32>) -> anyhow::Result<u32> {
         let context_size = if index > 0 { 1 } else { tokens.len() };
@@ -210,7 +209,7 @@ impl<'a> Qwen3<'a> {
         let template = self.jinja_env.get_template("chat")?;
         let message_str = template
             .render(context)
-            .map_err(|e| Error::Msg(format!("failed to render chat template: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!(format!("render template  error{}", e)))?;
         Ok(message_str)
     }
 
@@ -223,18 +222,16 @@ impl<'a> Qwen3<'a> {
         stream
     }
 
-
     pub fn infer(&mut self, message_str: String) -> anyhow::Result<String> {
-        self.model.clear_kv_cache();
         let mut tokens = self
             .tokenizer
             .encode(message_str, true)
-            .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?
+            .map_err(|e| anyhow::anyhow!(format!("tokenizer encode error{}", e)))?
             .get_ids()
             .to_vec();
         let input_len = tokens.len();
         for index in 0..self.max_generate {
-            let next_token = self.next_token(index,&mut tokens)?;
+            let next_token = self.next_token(index, &mut tokens)?;
             tokens.push(next_token);
             if matches!(self.eos_token1, Some(eos_token) if eos_token == next_token)
                 || matches!(self.eos_token2, Some(eos_token) if eos_token == next_token)
@@ -246,14 +243,13 @@ impl<'a> Qwen3<'a> {
         let decode = self
             .tokenizer
             .decode(&tokens[input_len..all_tokens], true)
-            .map_err(|e| Error::Msg(format!("tokenizer encode error{}", e)))?;
+            .map_err(|e| anyhow::anyhow!(format!("tokenizer decode error{}", e)))?;
         self.model.clear_kv_cache();
         Ok(decode)
     }
 
     pub fn generate(&mut self, request: &ChatRequest) -> anyhow::Result<String> {
-        let message_str = self.render_template(request)?;        
+        let message_str = self.render_template(request)?;
         self.infer(message_str)
     }
-
 }
