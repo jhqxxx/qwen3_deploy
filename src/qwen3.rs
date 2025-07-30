@@ -1,6 +1,6 @@
 use crate::ChatRequest;
-use crate::utils::{get_device, get_template};
-use candle_core::{DType, Device, Error, Tensor, bail};
+use crate::utils::{get_device, str_startswith, str_endswith};
+use candle_core::{DType, Device, Error, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::qwen3::{Config, ModelForCausalLM};
@@ -11,14 +11,7 @@ use rocket::futures::Stream;
 use std::fs;
 use tokenizers::tokenizer::Tokenizer;
 
-// 自定义字符串方法实现
-pub fn str_startswith(s: &str, prefix: &str) -> bool {
-    s.starts_with(prefix)
-}
 
-pub fn str_endswith(s: &str, suffix: &str) -> bool {
-    s.ends_with(suffix)
-}
 
 pub struct Qwen3<'a> {
     tokenizer: Tokenizer,

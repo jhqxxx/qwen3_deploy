@@ -68,3 +68,12 @@ pub fn get_template(path: String) -> Result<String> {
         );
     Ok(fixed_template)
 }
+
+// 自定义字符串方法实现
+pub fn str_startswith(s: &str, prefix: &str) -> bool {
+    s.starts_with(prefix)
+}
+
+pub fn str_endswith(s: &str, suffix: &str) -> bool {
+    s.ends_with(suffix)
+}
