@@ -28,7 +28,7 @@ pub struct Qwen3<'a> {
 
 impl<'a> Qwen3<'a> {
     pub fn new(path: String, is_cpu: bool) -> anyhow::Result<Self> {
-        Qwen3::new_with_param(path, 81920, 1.1, 64, is_cpu)
+        Qwen3::new_with_param(path, 81920, 1.1, 64, is_cpu, 299792458, None, None)
     }
     pub fn new_with_param(
         path: String,
@@ -36,6 +36,9 @@ impl<'a> Qwen3<'a> {
         repeat_penalty: f32,
         repeat_last_n: usize,
         is_cpu: bool,
+        seed: u64,
+        temperature: Option<f64>,
+        top_p: Option<f64>,
     ) -> anyhow::Result<Self> {
         assert!(
             std::path::Path::new(&path).exists(),
@@ -47,7 +50,7 @@ impl<'a> Qwen3<'a> {
             "tokenizer.json not exists in model path"
         );
         let tokenizer = Tokenizer::from_file(tokenizer_file)
-            .map_err(|e| Error::Msg(format!("tokenizer from file error:{}", e)))?;
+            .map_err(|e| anyhow::anyhow!(format!("tokenizer from file error{}", e)))?;
         let eos_token1 = tokenizer.get_vocab(true).get("<|endoftext|>").copied();
         let eos_token2 = tokenizer.get_vocab(true).get("<|im_end|>").copied();
         let device = if is_cpu { Device::Cpu } else { get_device()? };
@@ -61,9 +64,9 @@ impl<'a> Qwen3<'a> {
             "config.json not exists in model path"
         );
         let config: Config = serde_json::from_slice(&std::fs::read(config_file)?)
-            .map_err(|e| Error::Msg(format!("load config file error:{}", e)))?;
+            .map_err(|e| anyhow::anyhow!(format!("load config file error{}", e)))?;
         let model = ModelForCausalLM::new(&config, vb)?;
-        let logits_processor = LogitsProcessor::new(299792458, None, None);
+        let logits_processor = LogitsProcessor::new(seed, temperature, top_p);
 
         let mut env = Environment::new();
 

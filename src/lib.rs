@@ -1,21 +1,18 @@
 use crate::qwen3::Qwen3;
 use openai_dive::v1::resources::chat::{
-    ChatCompletionChunkChoice, ChatCompletionChunkResponse, 
-    ChatCompletionResponse, ChatCompletionChoice, ChatMessage, ChatMessageContent,
-    DeltaChatMessage, DeltaFunction, DeltaToolCall, ToolCall, Function as ChatFunction
+    ChatCompletionChoice, ChatCompletionChunkChoice, ChatCompletionChunkResponse,
+    ChatCompletionResponse, ChatMessage, ChatMessageContent, DeltaChatMessage, DeltaFunction,
+    DeltaToolCall, Function as ChatFunction, ToolCall,
 };
 use openai_dive::v1::resources::shared::FinishReason;
 use rocket::async_stream::stream;
 use rocket::futures::{Stream, StreamExt};
-use rocket::response::content;
-use std::pin::pin;
-use std::sync::{Arc, Mutex, OnceLock};
-use tokio::sync::RwLock;
-use uuid::uuid;
 use serde_json::Value;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::RwLock;
 
-mod qwen3;
-mod utils;
+pub mod qwen3;
+pub mod utils;
 
 const MODEL_NAME: &str = "qwen3-0.6b";
 
@@ -24,9 +21,9 @@ static MODEL: OnceLock<Arc<RwLock<Qwen3>>> = OnceLock::new();
 // 主请求结构体
 #[derive(Debug, serde::Deserialize)]
 pub struct ChatRequest {
-    messages: Vec<Message>,
-    tools: Option<Vec<Tool>>,
-    pub stream: Option<bool>
+    pub messages: Vec<Message>,
+    pub tools: Option<Vec<Tool>>,
+    pub stream: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -121,8 +118,7 @@ pub fn chat_stream(message: &ChatRequest) -> anyhow::Result<impl Stream<Item = S
     })
 }
 
-
-fn build_chunk_choice(
+pub fn build_chunk_choice(
     token: String,
     tool_call_id: Option<String>,
     tool_call_content: Option<String>,
@@ -208,19 +204,25 @@ pub async fn chat_sync(message: &ChatRequest) -> anyhow::Result<String> {
     let response_str = serde_json::to_string(&response).unwrap();
     Ok(response_str)
 }
-fn build_choice(token: String) -> ChatCompletionChoice {
+pub fn build_choice(token: String) -> ChatCompletionChoice {
     if token.contains("<tool_call>") {
         let mes: Vec<&str> = token.split("<tool_call>").collect();
         let content = mes[0].to_string();
-        let tool_mes = mes[1].replace("</tool_call>", "");
-        let function = match serde_json::from_str::<serde_json::Value>(&tool_mes) {
+        let mut tool_vec = Vec::new();
+        for i in 1..mes.len() {
+            let tool_mes = mes[i].replace("</tool_call>", "");
+            let function = match serde_json::from_str::<serde_json::Value>(&tool_mes) {
                 Ok(json_value) => {
                     let name = json_value
                         .get("name")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()).unwrap_or_default();
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
 
-                    let arguments = json_value.get("arguments").map(|v| v.to_string()).unwrap_or_default();
+                    let arguments = json_value
+                        .get("arguments")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
 
                     ChatFunction { name, arguments }
                 }
@@ -229,11 +231,13 @@ fn build_choice(token: String) -> ChatCompletionChoice {
                     arguments: "".to_string(),
                 },
             };
-        let tool_call = ToolCall {
-            id: "0".to_string(),
-            r#type: "function".to_string(),
-            function: function
-        };
+            let tool_call = ToolCall {
+                id: (i-1).to_string(),
+                r#type: "function".to_string(),
+                function: function,
+            };
+            tool_vec.push(tool_call);
+        }        
         ChatCompletionChoice {
             index: 0,
             message: ChatMessage::Assistant {
@@ -242,7 +246,7 @@ fn build_choice(token: String) -> ChatCompletionChoice {
                 refusal: None,
                 name: None,
                 audio: None,
-                tool_calls: Some(vec![tool_call]),
+                tool_calls: Some(tool_vec),
             },
             finish_reason: Some(FinishReason::ToolCalls),
             logprobs: None,
@@ -261,74 +265,5 @@ fn build_choice(token: String) -> ChatCompletionChoice {
             finish_reason: Some(FinishReason::StopSequenceReached),
             logprobs: None,
         }
-    }    
-}
-
-mod tests {
-    use crate::chat_stream;
-    use crate::chat_sync;
-    use crate::init;
-    use crate::ChatRequest;
-    use rocket::futures::{Stream, StreamExt};
-    use std::pin::pin;
-
-    #[tokio::test]
-    async fn test_chat() {
-        let message = r#"
-    {
-        "messages": [
-            {
-                "role": "user",
-                "content": "图片里有什么？图片地址：[\"data/chat/kb/17992851581189image_1753331929967.png\"], 必须调用工具"
-            }
-        ],
-        "model": "deepseek-chat",
-        "response_format": {
-            "type": "text"
-        },
-        "stream": true,
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "image-qa-onlineA-_-Achat_to_image",
-                    "description": "chat anything with image",
-                    "parameters": {
-                        "$schema": "http://json-schema.org/draft-07/schema#",
-                        "properties": {
-                            "image_paths": {
-                                "items": {
-                                    "type": "string"
-                                },
-                                "type": "array"
-                            },
-                            "prompt": {
-                                "type": "string"
-                            }
-                        },
-                        "required": [
-                            "prompt",
-                            "image_paths"
-                        ],
-                        "title": "Req",
-                        "type": "object"
-                    }
-                }
-            }
-        ],
-        "tool_choice": null
-    }
-    "#;
-        init("/mnt/c/jhq/huggingface_model/Qwen/Qwen3-0___6B").unwrap();
-        let start = std::time::Instant::now();
-        println!("开始");
-        let request: ChatRequest = serde_json::from_str(&message).unwrap();
-        // let mut stream = pin!(chat_stream(&request).unwrap());
-        // while let Some(item) = stream.next().await {
-        //     println!("{}", item);
-        // }
-        let response = chat_sync(&request).await.unwrap();
-        println!("{response}");
-        println!("耗时：{}ms", start.elapsed().as_millis());
     }
 }

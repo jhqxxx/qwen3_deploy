@@ -10,7 +10,6 @@ use std::{env, fs};
 use qwen3_deploy::init;
 
 mod api;
-mod utils;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
