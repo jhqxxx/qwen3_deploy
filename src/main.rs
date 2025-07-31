@@ -40,7 +40,6 @@ pub async fn start_http_server(port: u16, model_path: String) -> anyhow::Result<
         ..Config::default()
     });
 
-    // 知识库
     builder = builder.mount("/chat", routes![api::chat]);
 
     init(&model_path)?;
