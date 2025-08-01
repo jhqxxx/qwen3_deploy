@@ -127,9 +127,9 @@ impl<'a> Qwen3<'a> {
             .encode(message_str, true)
             .map_err(|e| anyhow::anyhow!(format!("stream encode error{}", e)))?
             .get_ids()
-            .to_vec();
-        let mut error_tokens = Vec::new();
+            .to_vec();        
         let stream = stream! {
+            let mut error_tokens = Vec::new();
             for index in 0..self.max_generate {
                 let next_token = self.next_token(index,&mut tokens);
                 if let Err(e) = next_token{
