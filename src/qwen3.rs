@@ -1,6 +1,6 @@
 use crate::ChatRequest;
 use crate::utils::{get_device, str_startswith, str_endswith};
-use candle_core::{DType, Device, Error, Tensor};
+use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::generation::LogitsProcessor;
 use candle_transformers::models::qwen3::{Config, ModelForCausalLM};
