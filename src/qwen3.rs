@@ -70,18 +70,30 @@ impl<'a> Qwen3<'a> {
 
         let mut env = Environment::new();
 
-        // 添加自定义方法
-        env.add_function("str_startswith", |s: String, prefix: String| {
-            str_startswith(&s, &prefix)
-        });
-
-        env.add_function("str_endswith", |s: String, suffix: String| {
-            str_endswith(&s, &suffix)
-        });
 
         // 添加自定义过滤器
         env.add_filter("tojson", |v: MiniJinjaValue| {
             serde_json::to_string(&v).unwrap()
+        });
+
+        env.add_filter("split", |s: String, delimiter: String| {
+            s.split(&delimiter).map(|s| s.to_string()).collect::<Vec<String>>()
+        });
+
+        // 添加 lstrip 过滤器
+        env.add_filter("lstrip", |s: String, chars: Option<String>| {
+            match chars {
+                Some(chars_str) => s.trim_start_matches(chars_str.as_str()).to_string(),
+                None => s.trim_start().to_string(),
+            }
+        });
+
+        // 添加 rstrip 过滤器
+        env.add_filter("rstrip", |s: String, chars: Option<String>| {
+            match chars {
+                Some(chars_str) => s.trim_end_matches(chars_str.as_str()).to_string(),
+                None => s.trim_end().to_string(),
+            }
         });
         let _ = env.add_template("chat", include_str!("chat_template.jinja"));
 

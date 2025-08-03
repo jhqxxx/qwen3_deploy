@@ -1,6 +1,6 @@
+use candle_core::{Device, Error, Result};
+use serde_json::Value;
 use std::process::Command;
-use serde_json::{Value};
-use candle_core::{Result, Device, Error};
 
 pub fn gpu_sm_arch_is_ok() -> Result<bool> {
     let output = Command::new("nvidia-smi")
@@ -19,15 +19,14 @@ pub fn gpu_sm_arch_is_ok() -> Result<bool> {
     let output_str = output_str.trim();
     let sm_float = match output_str.parse::<f32>() {
         Ok(num) => num,
-        Err(_) => return Err(Error::Msg(format!(
-          "gpr sm arch: {} parse float32 error", output_str
-        )))
+        Err(_) => {
+            return Err(Error::Msg(format!(
+                "gpr sm arch: {} parse float32 error",
+                output_str
+            )));
+        }
     };
-    if sm_float >=6.1 {
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    if sm_float >= 6.1 { Ok(true) } else { Ok(false) }
 }
 
 pub fn get_device() -> Result<Device> {
@@ -38,8 +37,8 @@ pub fn get_device() -> Result<Device> {
             } else {
                 Device::Cpu
             }
-        },
-        Err(_) => Device::Cpu
+        }
+        Err(_) => Device::Cpu,
     };
     Ok(device)
 }
@@ -50,9 +49,8 @@ pub fn get_template(path: String) -> Result<String> {
         std::path::Path::new(&tokenizer_config_file).exists(),
         "tokenizer_config.json not exists in model path"
     );
-    let tokenizer_config: Value =
-        serde_json::from_slice(&std::fs::read(tokenizer_config_file)?)
-            .map_err(|e| Error::Msg(format!("load tokenizer_config file error:{}", e)))?;
+    let tokenizer_config: Value = serde_json::from_slice(&std::fs::read(tokenizer_config_file)?)
+        .map_err(|e| Error::Msg(format!("load tokenizer_config file error:{}", e)))?;
     let chat_template = tokenizer_config["chat_template"]
         .as_str()
         .ok_or(Error::Msg(format!("chat_template to str error")))?;
@@ -60,12 +58,31 @@ pub fn get_template(path: String) -> Result<String> {
     let fixed_template = chat_template
         .replace(
             "message.content.startswith('<tool_response>')",
-            "str_startswith(message.content, '<tool_response>')",
+            "message.content is startingwith('<tool_response>')"     // 使用minijinja中的 is startingwith 替换
         )
         .replace(
             "message.content.endswith('</tool_response>')",
-            "str_endswith(message.content, '</tool_response>')",
+            "message.content is endingwith('</tool_response>')"     // 使用minijinja中的 is endingwith 替换
+        ).replace(
+            "content.split('</think>')[0].rstrip('\\n').split('<think>')[-1].lstrip('\\n')",
+            "((content | split('</think>'))[0] | rstrip('\\n') | split('<think>'))[-1] | lstrip('\\n')"  // 使用自定义的split, rstrip, lstrip过滤器替换
+        )
+        .replace(
+            "content.split('</think>')[-1].lstrip('\\n')",
+            "(content | split('</think>'))[-1] | lstrip('\\n')"   // 使用自定义的过滤器替换
+        )
+        .replace(
+            "reasoning_content.strip('\\n')",
+            "reasoning_content | strip('\\n')"    // 使用自定义的过滤器替换
+        )
+        .replace(
+            "content.lstrip('\\n')",
+            "content | lstrip('\\n')"   // 使用自定义的过滤器替换
         );
+    if fixed_template.contains(".split(") {
+        println!("-------------------------------- Warning: Template still contains .split() method calls");
+    }
+    println!("\n\n{}\n\n", fixed_template);
     Ok(fixed_template)
 }
 

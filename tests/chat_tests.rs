@@ -109,13 +109,13 @@ async fn test_chat_stream() {
     }
     "#;
     init("/mnt/c/jhq/huggingface_model/Qwen/Qwen3-0___6B").unwrap();
-        let start = std::time::Instant::now();
-        println!("开始");
-        let request: ChatRequest = serde_json::from_str(&message).unwrap();
-        let mut stream = pin!(chat_stream(&request).unwrap());
-        while let Some(item) = stream.next().await {
-            println!("{}", item);
-        }
-        println!("耗时：{}ms", start.elapsed().as_millis());
+    let start = std::time::Instant::now();
+    println!("开始");
+    let request: ChatRequest = serde_json::from_str(&message).unwrap();
+    let mut stream = pin!(chat_stream(&request).unwrap());
+    while let Some(item) = stream.next().await {
+        println!("{}", item);
+    }
+    println!("耗时：{}ms", start.elapsed().as_millis());
 
 }

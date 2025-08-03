@@ -17,7 +17,7 @@
 {%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
 {%- for message in messages[::-1] %}
     {%- set index = (messages|length - 1) - loop.index0 %}
-    {%- if ns.multi_step_tool and message.role == "user" and message.content is string and not(str_startswith(message.content, '<tool_response>') and str_endswith(message.content, '</tool_response>')) %}
+    {%- if ns.multi_step_tool and message.role == "user" and message.content is string and not(message.content is startingwith('<tool_response>') and message.content is endingwith('</tool_response>')) %}
         {%- set ns.multi_step_tool = false %}
         {%- set ns.last_query_index = index %}
     {%- endif %}
@@ -36,13 +36,13 @@
             {%- set reasoning_content = message.reasoning_content %}
         {%- else %}
             {%- if '</think>' in content %}
-                {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
-                {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+                {%- set reasoning_content = ((content | split('</think>'))[0] | rstrip('\n') | split('<think>'))[-1] | lstrip('\n') %}
+                {%- set content = (content | split('</think>'))[-1] | lstrip('\n') %}
             {%- endif %}
         {%- endif %}
         {%- if loop.index0 > ns.last_query_index %}
             {%- if loop.last or (not loop.last and reasoning_content) %}
-                {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+                {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content | strip('\n') + '\n</think>\n\n' + content | lstrip('\n') }}
             {%- else %}
                 {{- '<|im_start|>' + message.role + '\n' + content }}
             {%- endif %}
