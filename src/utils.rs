@@ -29,15 +29,37 @@ pub fn gpu_sm_arch_is_ok() -> Result<bool> {
     if sm_float >= 6.1 { Ok(true) } else { Ok(false) }
 }
 
+pub fn nvcc_is_ok() -> Result<bool> {
+    let output = Command::new("nvcc")
+        .arg("-V")
+        .output()
+        .map_err(|e| Error::Msg(format!("Failed to execute nvcc -V: {}", e)))?;
+    if !output.status.success() {
+        return Err(Error::Msg(format!(
+            "nvcc -V failed with status: {}\nError: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    if output_str.contains("Cuda") && output_str.contains("release") {
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+pub fn cuda_is_ok() -> Result<bool> {
+    let sm_is_ok = gpu_sm_arch_is_ok()?;
+    let nvcc_is_ok = nvcc_is_ok()?;
+    Ok(sm_is_ok && nvcc_is_ok)
+}
+
 pub fn get_device() -> Result<Device> {
-    let device = match gpu_sm_arch_is_ok() {
-        Ok(flag) => {
-            if flag {
-                Device::cuda_if_available(0)?
-            } else {
-                Device::Cpu
-            }
-        }
+    let device = match cuda_is_ok() {
+        Ok(true) => Device::cuda_if_available(0)?,
+        Ok(false) => Device::Cpu,
         Err(_) => Device::Cpu,
     };
     Ok(device)
