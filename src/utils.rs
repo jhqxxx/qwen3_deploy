@@ -21,7 +21,7 @@ pub fn gpu_sm_arch_is_ok() -> Result<bool> {
         Ok(num) => num,
         Err(_) => {
             return Err(Error::Msg(format!(
-                "gpr sm arch: {} parse float32 error",
+                "gpu sm arch: {} parse float32 error",
                 output_str
             )));
         }
@@ -58,7 +58,7 @@ pub fn cuda_is_ok() -> Result<bool> {
 
 pub fn get_device() -> Result<Device> {
     let device = match cuda_is_ok() {
-        Ok(true) => Device::cuda_if_available(0)?,
+        Ok(true) => Device::new_cuda(0)?,
         Ok(false) => Device::Cpu,
         Err(_) => Device::Cpu,
     };

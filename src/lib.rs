@@ -54,7 +54,7 @@ pub struct Function {
 
 pub fn init(path: &str) -> anyhow::Result<()> {
     let model_path = path.to_string();
-    let model = Qwen3::new(model_path, false)?;
+    let model = Qwen3::new(model_path, true)?;
     MODEL.get_or_init(|| Arc::new(RwLock::new(model)));
     Ok(())
 }
