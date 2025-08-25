@@ -7,5 +7,9 @@ rust部署Qwen3，使用http协议，支持流式输出
 * cargo run -- --model-path  /your-qwen3-model-path
 
 ### windows
-* wget https://github.com/jhqxxx/qwen3_deploy/releases/download/0.1.3/deploy-x86_64-pc-windows-msvc.exe
-* deploy-x86_64-pc-windows-msvc.exe  --model-path /your-qwen3-model-path
+* use cuda
+    * wget https://github.com/jhqxxx/qwen3_deploy/releases/download/0.1.3/deploy-x86_64-pc-windows-msvc-cuda.exe
+    * deploy-x86_64-pc-windows-msvc-cuda.exe  --model-path /your-qwen3-model-path
+* use cpu
+    * wget https://github.com/jhqxxx/qwen3_deploy/releases/download/0.1.3/deploy-x86_64-pc-windows-msvc-cpu.exe
+    * deploy-x86_64-pc-windows-msvc-cpu.exe  --model-path /your-qwen3-model-path
